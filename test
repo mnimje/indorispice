@@ -1,0 +1,402 @@
+Supported Data Load Types
+The data loads can be History and delta Loads. It is possible to have multiple data load runs per day. The supported data load patterns are
+3.1.1.	Full Load (FL)
+This load type will ingest/replicate the full snapshot of the source data to the target raw table every time this table job is run. 
+	The Audit columns applicable for this load are 
+	Load Date 
+	Load Timestamp
+
+3.1.2.	Full Load with History (DFL)
+In this load type, the entire source data is imported to Hadoop whenever the job is run. The DIA process in Hadoop will compare this delta dataset with the active records (hdfs_current_flag=Y) from the raw table, identifies the inserted, deleted and updated records and merges the change to the raw table.
+	The audit columns for this load type are
+	Start date
+	End date
+	Current Flag
+	Load Timestamp
+
+ 
+	For Insert case, the process picks those records from current load’s dataset whose primary key is not available in active records of raw table’s dataset. These records is marked with 
+
+	start date = Today – 18hrs
+	end date = 9999-12-31
+	current flag = Y
+	Load timestamp = timestamp when record is inserted to raw table
+
+	For Delete case, the process picks those records from active records of raw table’s dataset whose primary key is not available in current load dataset. These records are marked with
+
+	start date = active record’s start date will remain unchanged
+	end date = Today – 42hrs
+	current flag = N
+	Load timestamp = timestamp when record is inserted to raw table
+
+	For Update case, the process picks up all matching primary key records of raw table dataset and current load dataset, creates MD5 Hash Checksum of both the records excluding the CDC compare columns. The Hash Checksum is compared for each row and if there is a mismatch, then it is identified as updated record. 
+In this case, the record from raw table is marked with
+	Start date = active record’s start date will remain unchanged
+	end date = Today – 42hrs
+	current flag = N
+	Load timestamp = timestamp when record is inserted to raw table
+The record from current load is marked as INSERTED with
+	Start date = Today – 18hrs
+	end date = 9999-12-31
+	current flag = Y
+	Load timestamp = timestamp when record is inserted to raw table
+
+3.1.3.	Delta Load (DDL)
+In this load type, only the incremental delta data is imported to Hadoop whenever the job is run. It is mandatory to have Delta column field for these type of loads. If the configured delta column field is not found in the load, then deleted records will be ignored.
+	The audit columns for this load type are
+	Start date
+	End date
+	Current Flag
+	Load Timestamp
+
+	For Insert case, the process picks those records from current load’s dataset whose primary key is not available in active records of raw table’s dataset. These records is marked as INSERTED with 
+
+	start date = Today – 18hrs
+	end date = 9999-12-31
+	current flag = Y
+	Load timestamp = timestamp when record is inserted to raw table
+
+	For Delete case, the process picks those primary key matching records from raw table’s active records for which delta indicator field is marked ‘D’ in the current load. These records is marked as DELETED with
+
+	start date = active record’s start date will remain unchanged
+	end date = Today – 42hrs
+	current flag = N
+	Load timestamp = timestamp when record is inserted to raw table
+
+	For Update case, the process picks up all matching primary key records of raw table dataset and current load dataset, creates MD5 hashtag of both the records excluding the CDC compare columns. These hashtags are compared for each row and if there is a mismatch, then it is identified as updated record. 
+In this case, the record from raw table is marked as DELETE with
+	Start date = active record’s start date will remain unchanged
+	end date = Today – 42hrs
+	current flag = N
+	Load timestamp = timestamp when record is inserted to raw table
+The record from current load is marked as INSERTED with
+	Start date = Today – 18hrs
+	end date = 9999-12-31
+	current flag = Y
+	Load timestamp = timestamp when record is inserted to raw table
+3.1.4.	Delta Load XKey Updates (DDLX)
+In this load type, along with the DDL load process as mentioned in #2.2.3, there is additional process to check if the primary keys have been updated. In this case, the active record in raw table with the old primary key is marked for DELETE.
+3.1.5.	Append (DDLAP) 
+In this load type, the delta records are appended to the raw table with audit columns
+The audit columns for this load type are
+	Load Date = today
+	Load Timestamp = current timestamp
+3.1.6.	Blind Append (DBLAP) (yet to validate the implementation)
+In this load type, the delta records are appended to the raw table as-is. No audit columns are added to this data.
+3.1.7.	Upsert (DDLAPU) (yet to validate the implementation)
+In this load type, all the records are identified as inserted, updated and deleted similar to #2.2.2 and but in this case, the current load’s records are appended to the raw table data with the identified flag.
+The audit columns for this load type are
+	Current Flag = Y for inserted, updated records. N for deleted records
+	Load Date = Today
+	Load flag = I/U/D
+	Load Timestamp
+4.	Data Ingestion Flow
+
+ 
+5.	DIA Features
+1.	The Schema XML and the hive tables are auto-created based on the source metadata.
+2.	Multiple data loads are possible for same table within a single day
+3.	Data from multiple sources with same data structure can be loaded into same target hive table in raw database. The Target schema xml name with location to be provided in the control table.
+4.	There is provision to exclude table columns when comparing the day-2 and day-1 records to identify the updated records. It has to be configured in the control table for specific table entry.
+5.	There are provisions for configuring pre and post processing scripts at each stage of the ingestion process. These scripts have to be configured in the control table for specific table entry. The options are
+•	Pre script can be configured to run at the starting of the job
+	Pre script can be configured to run before ingesting data from source
+	Post script can be configured to run after ingesting data from source
+
+	Pre script can be configured to run before CDC and SCDType2 processing
+	Post script can be configured to run after CDC and SCDType2 processing
+
+	Pre script can be configured to run before data-preparation (data overwrite to raw table)
+	Post script can be configured to run after data-preparation (data overwrite to raw table)
+•	Post script can be configured to run at the starting of the job
+6.	Email alerts are triggered for both failure and success status for each job run. The TO and CC mail IDs has to be configured in control table for each table entry.
+7.	The audit columns in target hive raw table are dynamic based on the load type. They are mentioned in the section #3.
+8.	The CDC output data can be queried from work DB after the CDC processing is completed. The work table name is <workdb>.<tablename>_cdc
+9.	Provision to select specific columns to write to target raw table. This is achieved by configuring the target schema in control table. 
+Note: The column names in target schema should be same as the schema xml of that job entry.  
+10.	Storage Format & Compression Support – Apart from existing TEXT files format, the hive tables can be configured to be one of below. This is driven from control table configuration (tgt_tbl_file_format, tgt_tbl_compression) for each ingestion job.
+•	PARQUET file format with SNAPPY Compression
+Note:
+	The date and timestamp datatypes are not supported for this file format. It is limitation from Cloudera. Hence decided to convert those columns to string data types.
+	When NULL is read in PIG, the representation is like empty. But since the work tables are of Text file format and the NULL representation is \N, there is a mismatch identified and those records are considered as updated though there is no change. Hence the work table also to the same format as raw table before CDC process.
+
+•	AVRO file format with SNAPPY Compression
+Note:
+	The timestamp datatype is not supported for this file format. It is limitation from Cloudera. Hence decided to convert those columns to string data type.
+	When NULL is read in PIG, the representation is like empty. But since the work tables are of Text file format and the NULL representation is \N, there is a mismatch identified and those records are considered as updated though there is no change. Hence have converted the work table also to the same format as raw table before CDC process.
+
+11.	Capability to reverse ingest data from Hive tables of below formats to Teradata
+•	TEXT file (no compression)
+•	AVRO file format with SNAPPY Compression
+
+12.	Ingestion load stats (shown below) are logged into dia_job_log table in dl_dih_work hive db for every job run.
+•	Process name (Ingestion, Rule processing, CDC, SCD, Data preparation)
+•	Start time
+•	End time
+•	Source record count
+•	Target record count
+•	Process success/failure status
+•	Error message
+
+13.	The table and column name options in the Sqoop import command are changed to query. On providing db_src_tbl_nm, columns_list and src_tbl_where_clause in the control table, the query will be framed accordingly and used in Sqoop import script.
+
+14.	Table Partitioning is enabled for the audit columns. For e.g. 
+•	For DFL,DDL,DDLX, target table can be partitioned based on the hdfs_end_date
+•	For DDLAP, the target table can be partitioned based on the hdfs_load_date
+This feature is control table configuration driven. The refresh_type has to be set as partition and the refresh_column has to be set to the audit column name based on which the partition has to be applied.
+
+15.	Provision to load multiple files to the target table in a single job. It supports
+•	All files from a single directory (provide as ALL_FILES_IN_PATH in data_file_name column)
+•	Multiple files from a single directory in NAS, SAN or SAN_REMOTE locations. 
+•	Multiple files from Mainframe
+To mention specific file names, provide the file names with comma (,) separator in the data_file_name column in the control table for that job
+
+ 
+6.	DIA Components Overview
+
+ 
+6.1.	 Metagen component
+This component fetches metadata from various sources like rdbms tables via jdbc, COBOL copybooks, delimited header files and fixed width header files and creates schema xml file which is used in subsequent processes/components.
+6.2.	 Objectgen component
+This component creates hive tables as per the Schema xml.
+6.3.	 Data Ingestion component
+This component is used for ingesting data to Hadoop from various sources. The data lands in the work area which is accessible from the work table. The various mechanisms of data ingestion are listed below
+Source	Header file format	Data file format	Ingestion mechanism
+RDBMS	NA		Single delimited files	Sqoop import to hive work table HDFS location
+Mainframe	Copybook		Fixed width binary files
+	Fixed width ASCII files
+	Single delimited files	File downloaded using lftp.
+Downloaded file is moved to download work table HDFS location. From download table (Hive cobol2hive serde format), the selected columns are loaded to hive work table as text format
+NAS/LOCAL SAN	Header template file		Single delimited files (FSD)
+
+
+	Multi delimited files (FMD)
+
+
+
+
+
+
+	Fixed width ASCII files	Files copied from NAS/SAN locations to hive work table HDFS location
+
+Files copied from NAS/SAN to download work table HDFS location. From download table (Hive muli-delimited serde format), the selected columns are loaded to hive work table as text format
+ 
+Files copied from NAS/SAN to download work table HDFS location. From download table (Hive RegEx serde format), the selected columns are loaded to hive work table as text format
+Remote SAN	Header template file		Single delimited files
+	Multi delimited files
+	Fixed width ASCII files	File downloaded using sftp.
+Remaining process to load data to work table is same as above.
+
+6.4.	 Rules Processor Component
+The Rule processor is used for any ETL processing on Hadoop data. It works on the HDFS files as source and produces the output files in valid and reject folders respectively. It supports 
+
+	Validation
+o	Validate for any wrong data, data type etc
+o	It can also be used as filter to segregate output data based on certain data validation
+
+	Standardization/Enrichment
+o	Any type of formatting like date formatting, decimal formatting etc
+
+	De-duplication
+o	Finds duplicates based on the de-dup columns specified in the rule configuration
+
+	Transformation
+o	Dynamic instance of the dataset record is created and passed to the transformer rule.
+o	The transformation logic is in the drools file.
+
+	Aggregation 
+o	Supports all aggregation capabilities available in drools like sum, count, average, minimum and maximum
+
+	Reconciliation
+o	For any specified column or for the record count, it shows the source, target and rejected count.
+
+6.5.	 Data Processing Component
+This component does the Change Data Capture (CDC) and slowly change dimension TYPE 2 (SCD TYPE 2) processing on the ingested data. Post the processing the data is ready to be merged to the main persisted dataset in Hadoop.
+6.5.1.	CDC processing
+Reads files from HDFS location of raw table (day - 2) and work table (day -1) as input. Compares the two datasets, identifies inserted, updated and deleted records. Writes the CDC output to another HDFS location. (CDC output location).
+6.5.2.	SCD Type 2 processing
+Reads HDFS location of CDC output and HDFS location of raw table, writes the data merging between the raw table and the current load data based on inserted, updated and deleted conditions with respective audit columns. This process writes the output to the SCD output location in HDFS. The process also creates <tablename>_delta_raw external table in work database pointing to SCD output location. 
+6.6.	Data preparation Component
+If the refresh type is “full”, this process overwrite the table data in the raw database from delta_raw work table. Merged records are now available in the raw table.
+7.	DIA Framework Scripts for Data ingestion
+All required global and environment variables are configured in the .properties files in config folder. Below are the scripts for metadata creation and data ingestion.  
+8.	Control Table Structure
+Below is the control table structure. Entries have to be made for each table to be ingested based on the source and the load type. The YES/NO indicators are highlighted below.
+			Required (YES)/ NO (NO)
+#	Column Name	Description	RDBMS	HIVE	Mainframe	NAS,SAN Source	Remote SAN
+1	job_id	Unique name for Job	YES	YES	YES	YES	YES
+2	insert_timestamp	Time when the job entry is made	YES	YES	YES	YES	YES
+3	load_type	Data Ingestion load pattern. Possible values are FL,DFL,DDL,DDLAP,DDLAPU,DDBLAP,DDLX	YES	YES	YES	YES	YES
+4	source	Source of load. Possible values are RDBMS,COBOL,FLATFILES	YES	YES	YES	YES	YES
+5	source_type	Source type of load. Possible values are TD,CBL,FSD,FMD,FFW	YES	YES	YES	YES	YES
+6	db_src_tbl_nm	Name of source table being ingested. Applicable for RDBMS,HIVE	YES	NO	NO	NO	NO
+7	src_delimiter	Delimiter used in source file	NO	YES	YES	YES	YES
+8	hive_tgt_tbl_nm	Name of target table in hive	YES	YES	YES	YES	YES
+9	tgt_delimiter	Hive target table field delimiter	YES	YES	YES	YES	YES
+10	primary_key	Primary key of source table based on which CDC logic works	YES	YES for
+load_type= DFL/DDL/ DDLX/DDLAPU	YES for
+load_type= DFL/DDL/
+DDLX/DDLAPU	YES for
+load_type=DFL/DDL/
+DDLX/ DDLAPU	YES for
+load_type=DFL/DDL/ DDLX/ DDLAPU
+11	columns_list	 Required columns to be ingested from source to target	YES	YES	YES	YES	YES
+12	delta_field	In case of delta loads, the source field name which indicates the record is Insert, Update or Delete	YES for
+load_type= DDL/ DDLX/
+DDLAPU	YES for
+load_type= DDL/ DDLX/ DDLAPU	YES for
+load_type= DDL/ DDLX/ DDLAPU	YES for
+load_type=DDL/DDLX/
+DDLAPU	YES for 
+load_type= DDL/ DDLX/
+DDLAPU
+13	rules_content	Rules content to be added to schema XML file, based on which data quality checks/transformations are applied	NO	NO	NO	NO	NO
+14	hive_base_data_path	Target hive base data path or directory where the external table data files are created	YES	YES	YES	YES	YES
+15	hive_work_db	Target hive work database where work tables are created	YES	YES	YES	YES	YES
+16	hive_raw_db	Target hive raw database where final raw table is created	YES	YES	YES	YES	YES
+17	tmp_path	Tmp path where dynamic scripts, logs and Schema XMLs are created	YES	YES	YES	YES	YES
+18	jvm_heapsize	Java Virtual Machine heap size to be set for CDC Pig processes to be executed	YES	YES	YES	YES	YES
+19	xprimary_key	Used in case of XKEY logic where the primary key of a table itself gets changed	YES for  
+load_type= DDLX	YES for  
+load_type= DDLX	YES for  
+load_type= DDLX	YES for  
+load_type= DDLX	YES for  
+load_type= DDLX
+20	refresh_type	Type of data refresh. Possible values are 
+full, partition	YES	YES	YES	YES	YES
+21	refresh_column	Partition column in case of Partition refresh type	YES for  
+refresh_type=partition	YES for  
+refresh_type=partition	YES for 
+refresh_type=partition	YES for  
+refresh_type=partition	YES for  
+refresh_type=partition
+22	cdc_exclude_cols	Columns to be excluded in CDC comparision	NO	NO	NO	NO	NO
+23	alert_mail_to	Alert mails To distribution list	YES	YES	YES	YES	YES
+24	alert_mail_cc	Alert mails Cc distribution list	NO	NO	NO	NO	NO
+25	db_username	In case of RDBMS source - Username of source database	YES	YES	NO	NO	NO
+26	db_dbhost	In case of RDBMS source - DBHOST  of source database	YES	YES	NO	NO	NO
+27	db_src_dbname	In case of RDBMS source - DBNAME of source database	YES	YES	NO	NO	NO
+28	db_baseview	In case of RDBMS source - DB baseview name of source database	YES	NO	NO	NO	NO
+29	metadata_file_name	In case of CBL or FLAFILES - copybook or header filename based on which schema XML is generated.	NO	NO	YES	YES	YES
+30	metadata_unix_file_path	In case of CBL or FLAFILES - UNIX path where copybook or header filename resides.	NO	NO	YES	YES	YES
+31	data_src_file_name	In case of CBL or FLAFILES - source filename of data file to be loaded.	NO	NO	YES	YES	YES
+32	data_src_unix_file_path	In case of CBL or FLAFILES - UNIX path where data file resides.	NO	NO	NO	YES	YES
+33	zip_flag	In case of CBL or FLAFILES - to indicate if source file is zipped or not.	NO	NO	NO	NO	NO
+34	src_loc_type	In case of CBL or FLAFILES -indicate if source file is from Mainframe server or NAS or SAN	NO	NO	NO	YES	YES
+35	data_hdr_flag	In case of FLAFILES - to indicate if the data file has header as first row in it.	NO	NO	NO	NO	NO
+36	auth_id	Userid of source application	YES	NO	YES	NO	YES
+37	auth_scv_key	SCV value key used to retrieve password for respective auth id	YES	NO	YES	NO	NO
+38	auth_scv_namespace	SCV namespace used to retrieve password for respective auth id	YES	NO	YES	NO	NO
+39	rdbms_auth_type	Authentication type in case of RDBMS sources	YES	NO	NO	NO	NO
+40	cbl_include_fillers	In case of CBL files to indicate if filler fields to be included or not	NO	NO	YES	NO	NO
+41	cbl_input_format	In case of CBL files to indicate the input format is fixedwidth or variable width.	NO	NO	YES	NO	NO
+42	cbl_ascii_binary_ind	In case of CBL or FLAFILES to indicate if the text mode is ASCII or Binary	NO	NO	YES	NO	NO
+43	job_comments	Comments to be passed for special type of loads. This will be present as an audit field in target.	NO	NO	NO	NO	NO
+44	e2e_pre_script	End to End pre-processing script execution if any	NO	NO	NO	NO	NO
+45	di_pre_script	Data Ingestion pre-processing script execution if any	NO	NO	NO	NO	NO
+46	dproc_pre_script	Data Processing pre-processing script execution if any	NO	NO	NO	NO	NO
+47	dprep_pre_script	Data Preparation pre-processing script execution if any	NO	NO	NO	NO	NO
+48	e2e_post_script	End to End post-processing script execution if any	NO	NO	NO	NO	NO
+49	di_post_script	Data Ingestion post-processing script execution if any	NO	NO	NO	NO	NO
+50	dproc_post_script	Data Processing post-processing script execution if any	NO	NO	NO	NO	NO
+51	dprep_post_script	Data Preparation post-processing script execution if any	NO	NO	NO	NO	NO
+52	tgt_tbl_compression	The compression type (like snappy) to be applied on the target raw table	NO	NO	NO	NO	NO
+53	tgt_tbl_file_format	The file format to be applied on the target raw table. (AVRO, Parquet)	NO	NO	NO	NO	NO
+54	src_tbl_where_clause	The where clause to filter data from source once data lands to Hadoop. 	NO	NO	NO	NO	NO
+55	tgt_tbl_schema	Optional. If this schema xml is provided, then post data processing, columns from this schema are picked up and written to raw table	NO	NO	NO	NO	NO
+9.	DIA Development – Getting Started
+•	How to setup DIA codebase?
+1.	DIA Shell scripts
+•	Get latest DIA codebase (dataingestionaccelerator folder) from GIT to local folder
+•	Copy the above folder to the user’s home directory in Dev edgenode via winscp
+2.	Eclipse and JDK setup
+•	Install eclipse launcher and jdk1.8 from sss (Type sss in browser address bar and press enter)
+•	Type myapps in the browser, and go to myapps site, it will show the Eclipse and jdk with Not Installed status. Select them and install
+•	Type myapps in the browser, and go to myapps site, it will show the Eclipse and jdk with Not Installed status. Select them and install
+3.	Metagen and BigTransformer code setup
+•	Get latest codebase of Metagen and BigTransfomer codebase from GIT
+•	Import both the projects to Eclipse and compile.
+
+•	How to create job entry in control table?
+1.	The control table name is dl_dif_meta.dia_control_table. It is a managed table. Only zdbdwdbe use has write access to this table.
+2.	Impersonate the zdbdwdbe proid 
+suu -t -r DIFSetUp zdbdwdbe 
+When it asks for the password, provide the logged in user’s password.
+3.	Type beeline_connect in the terminal
+4.	In the beeline prompt, DDL/DML queries can be run on this table.
+5.	Make the control table entry for the required fields based on the source and load type.
+•	The job ids for the ingestion jobs should have the pattern as 	
+<tablename>_<source>_<load_type>
+Example: TACCT_ACTIVITY_CBL_DFL
+•	If there are control table entries just for creating the target table’s schema XML and the raw table structure as per Teradata, then those job ids should be of pattern 
+<tablename>_<source>_<load_type>_meta
+Example: TCASH_ACTIVITY_RDBMS_DFL_meta
+•	If there is any cleansing/formatting/transformation of the data required, provide the respective rule xml configuration in the control table entry so that it will get included in the metadata XML for processing.
+
+•	How to run a job and test the code?
+1.	Login to the Dev edgenode 
+2.	Impersonate the zdbdwdih proid 
+suu -t -r DIFSetUp zdbdwdih
+When it asks for the password, provide the logged in user’s password.
+3.	Setup the variables by running the below commands
+a.	cd <user home directory>/dataingestionaccelerator/
+b.	export PRJ_AFS=<user home directory>/dataingestionaccelerator
+Note: (This variable has to be set only for development. When the job is scheduled from TWS wrapper job, this variable will be automatically set)
+c.	Set the beeline connect variable. For e.g.
+export beeline_connect="beeline -u \"jdbc:hive2://idoop6.devin3.ms.com:10000/default;principal=hive/idoop6.devin3.ms.com@is1.morgan\""
+Note: (This variable has to be set only for development. When the job is scheduled from TWS wrapper job, this variable will be automatically set)
+d.	cd <user home directory>/dataingestionaccelerator/scripts
+
+4.	Trigger the jobs
+a.	To create the schema XMLs (one with table columns for rule processing and second with table + audit columns for ingestion to target table) and the raw table DDL script (.hql file),
+control_wrapper.sh <job_id>
+b.	Execute the .hql file created in above step in beeline and create the raw table.
+c.	To run the data ingestion job,
+di_control_wrapper.sh <job_id>
+
+ 
+10.	APPENDIX
+10.1.	Data movement from source to target - Sample
+10.1.1.	Day 1: Data from Source (full snapshot)
+KEY_ACCT	CUST_NM	CUST_ADDR
+89100	XXX	9th Avenue NY
+89101	YYY	Floor 11 NYP, NY
+
+10.1.2.	Day 1: Data Ingestion to table in raw db
+KEY_ACCT	CUST_NM	CUST_ADDR	CURRENT_FLAG	START_DATE	END_DATE	LOAD_TIMESTAMP
+89100	XXX	9th Avenue NY	Y	2016-09-01	9999-12-31	2016-09-01 01:01:01
+89101	YYY	Floor 11 NYP NY	Y	2016-09-01	9999-12-31	2016-09-01 01:01:05
+
+10.1.3.	Day 2: Data from Source
+KEY_ACCT	CUST_NM	CUST_ADDR
+89100	XXX	9th Avenue NY USA
+89102	ZZZ	Floor 24 Bridgetown CA
+
+10.1.4.	Day 2: Data Ingestion to table in work db
+KEY_ACCT	CUST_NM	CUST_ADDR	CURRENT_FLAG	START_DATE	END_DATE	LOAD_TIMESTAMP
+89100	XXX	9th Avenue NY USA		2016-09-02	9999-12-31	2016-09-02 01:01:01
+89102	ZZZ	Floor 24 Bridgetown CA		2016-09-02	9999-12-31	2016-09-02 01:01:05
+
+10.1.5.	CDC Processing (Full load with history-DFL)
+Compare raw and work HDFS files and outputs below format
+
+89100,XXX, 9th Avenue NY USA, 2016-09-02010101,UPDATED
+89102,ZZZ, Floor 24 Bridgetown CA, 2016-09-02010105,INSERTED
+89101,YYY, Floor 11 NYP NY,  2016-09-01010105,DELETED
+
+10.1.6.	SCD Type2 Processing (Full load with history -DFL)
+Compares CDC output file and raw HDFS file and merges as below and places in <table>_delta_raw table in the work database.
+89101,YYY, Floor 11 NYP NY, 2016-09-01, 2016-09-01,N, 2016-09-01010105
+89100,XXX, 9th Avenue NY, 2016-09-01,2016-09-01,N, 2016-09-01010101
+89100,XXX, 9th Avenue NY USA,2016-09-02, 9999-12-31,Y, 2016-09-02010101
+89102,ZZZ, Floor 24 Bridgetown CA, 2016-09-02, 9999-12-31,Y, 2016-09-02010105
+
+10.1.7.	Data Preparation (Full load with history DFL)
+Below result in delta raw table from work db is overwritten to table in raw database
+KEY_ACCT	CUST_NM	CUST_ADDR	CURRENT_FLAG	START_DATE	END_DATE	LOAD_TIMESTAMP
+89101	YYY	Floor 11 NYP NY	N	2016-09-01	2016-09-01	2016-09-01 01:01:05
+89100	XXX	9th Avenue NY	N	2016-09-01	2016-09-01	2016-09-01 01:01:01
+89100	XXX	9th Avenue NY USA	Y	2016-09-02	9999-12-31	2016-09-02 01:01:01
+89102	ZZZ	Floor 24 Bridgetown CA	Y	2016-09-02	9999-12-31	2016-09-02 01:01:05
+
+
